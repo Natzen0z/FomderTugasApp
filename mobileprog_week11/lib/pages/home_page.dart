@@ -17,6 +17,9 @@ class _HomePageState extends State<HomePage> {
 
   final apiService = ApiService();
   final localService = LocalStorageService();
+
+  String? lastRefresh; // timestamp
+
   @override
   void initState() {
     super.initState();
@@ -24,54 +27,98 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> loadCachedPosts() async {
-    String? cached = await localService.getPosts();
+    // Ambil posts
+    final cachedPosts = await localService.loadPosts();
+    final cachedTime = await localService.getLastRefresh();
 
-    if (cached != null) {
-      List jsonData = jsonDecode(cached);
-      posts = jsonData.map((e) => Post.fromJson(e)).toList();
+    if (cachedPosts != null) {
+      posts = cachedPosts;
+      lastRefresh = cachedTime;
+
       setState(() => isLoading = false);
+
+      // 🔥 Notifikasi Data from Cache
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Data from Cache"),
+          duration: Duration(seconds: 2),
+        ),
+      );
     }
 
-    loadFromAPI(); // Silently update
+    // Background refresh
+    loadFromAPI();
   }
 
   Future<void> loadFromAPI() async {
     try {
       List<Post> fresh = await apiService.fetchPosts();
-      setState(() {
-        posts = fresh;
-        isLoading = false;
-      });
+      posts = fresh;
+      isLoading = false;
+      await localService.savePosts(fresh);
 
-      localService.savePosts(jsonEncode(fresh.map((e) => e.toJson()).toList()));
+      lastRefresh = await localService.getLastRefresh();
+
+      setState(() {});
     } catch (e) {
       print("API error: $e");
     }
+  }
+
+  Future<void> clearCache() async {
+    await localService.clearCache();
+    setState(() {
+      posts = [];
+      lastRefresh = null;
+    });
+
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text("Cache Cleared")));
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text("Cached API Example"),
+        title: const Text("Cached API Example"),
         actions: [
           IconButton(
-            icon: Icon(Icons.refresh),
+            icon: const Icon(Icons.refresh),
             onPressed: () async {
               setState(() => isLoading = true);
               await loadFromAPI();
             },
           ),
+          IconButton(icon: const Icon(Icons.delete), onPressed: clearCache),
         ],
       ),
       body: isLoading
-          ? Center(child: CircularProgressIndicator())
-          : ListView.builder(
-              itemCount: posts.length,
-              itemBuilder: (context, index) {
-                final p = posts[index];
-                return ListTile(title: Text(p.title), subtitle: Text(p.body));
-              },
+          ? const Center(child: CircularProgressIndicator())
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (lastRefresh != null)
+                  Padding(
+                    padding: const EdgeInsets.all(8.0),
+                    child: Text(
+                      "Last Refresh: $lastRefresh",
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                  ),
+                Expanded(
+                  child: ListView.builder(
+                    itemCount: posts.length,
+                    itemBuilder: (context, index) {
+                      final p = posts[index];
+                      return ListTile(
+                        title: Text(p.title),
+                        subtitle: Text(p.body),
+                      );
+                    },
+                  ),
+                ),
+              ],
             ),
     );
   }
